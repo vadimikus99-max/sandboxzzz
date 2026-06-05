@@ -1,28 +1,75 @@
 name: Build APK
 on: [push, workflow_dispatch]
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    
+    # Кэшируем ~/.buildozer и ~/.local (pip) чтобы не качать SDK/NDK каждый раз
+    # Раскомментируйте, если сборки стали стабильными
+    # steps:
+    #   - uses: actions/cache@v4
+    #     with:
+    #       path: |
+    #         ~/.buildozer
+    #         ~/.local
+    #       key: ${{ runner.os }}-buildozer-${{ hashFiles('**/buildozer.spec') }}
+    #       restore-keys: |
+    #         ${{ runner.os }}-buildozer-
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+
     - name: Setup Python
       uses: actions/setup-python@v5
-      with: { python-version: '3.10' }
-    - name: Install Buildozer Deps
+      with:
+        python-version: '3.10'
+        # Кэш pip пакетов (buildozer, cython и т.д.)
+        cache: 'pip'
+        cache-dependency-path: '**/buildozer.spec'
+
+    # --- ИСПРАВЛЕНИЕ: Устанавливаем libtinfo5 из Ubuntu 22.04 (Jammy) ---
+    - name: Install libtinfo5 compatibility (Ubuntu 24.04 fix)
       run: |
-        sudo apt update
-        sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev automake
-    - name: Install Buildozer
-      run: pip install --user buildozer
+        wget -q http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+        sudo apt-get install -y ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
+        rm libtinfo5_6.3-2ubuntu0.1_amd64.deb
+
+    - name: Install Buildozer System Dependencies
+      run: |
+        sudo apt-get update
+        # libtinfo5 УЖЕ установлен выше, не включаем его сюда
+        sudo apt-get install -y \
+          git zip unzip openjdk-17-jdk python3-pip \
+          autoconf libtool pkg-config zlib1g-dev \
+          libncurses5-dev libncursesw5-dev \
+          cmake libffi-dev libssl-dev automake \
+          # Дополнительно полезно для buildozer/android:
+          libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+          libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev
+
+    - name: Install Buildozer & Cython
+      run: |
+        # setup-python с cache: pip уже добавил ~/.local/bin в PATH, 
+        # но на всякий случай явно обновим PATH для текущего шага
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        pip install --upgrade pip setuptools wheel
+        pip install --user buildozer cython
+
     - name: Build APK
+      # Используем shell: bash чтобы подхватить PATH из GITHUB_PATH
+      shell: bash
       run: |
-        export PATH=$PATH:~/.local/bin
-        cd MySandGame # Твоя папка проекта
+        cd MySandGame
+        # Первая сборка скачает SDK/NDK (~1-2 Гб), это займет время
         buildozer -v android debug
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: sandbox-apk
         path: MySandGame/bin/*.apk
+        retention-days: 7
         
